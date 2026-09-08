@@ -9,6 +9,8 @@ class Product(models.Model):
     image_url = models.TextField(blank=True, null=True)
     discount = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     isActive = models.BooleanField(default=True)
+    freeShipping = models.BooleanField(default=True)
+    gallery = models.JSONField(default=list, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

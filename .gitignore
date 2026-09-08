@@ -19,6 +19,8 @@ db.sqlite3
 db.sqlite3-journal
 media/
 staticfiles/
+api/migrations/*
+!api/migrations/__init__.py
 
 # Python packaging
 *.egg-info/
