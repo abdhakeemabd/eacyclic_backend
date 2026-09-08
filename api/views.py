@@ -13,10 +13,12 @@ from .models import Product, Order, Contact, UserProfile, Cart, CartItem, Delive
 from .serializers import (ProductSerializer, OrderSerializer, ContactSerializer,
                           UserSerializer, CartSerializer, CartItemSerializer, DeliverySerializer)
 
+
 # --- PRODUCTS & CONTACTS ---
 class ProductViewSet(viewsets.ModelViewSet):
     queryset = Product.objects.all().order_by('-created_at')
     serializer_class = ProductSerializer
+
 
 class ContactViewSet(viewsets.ModelViewSet):
     queryset = Contact.objects.all().order_by('-created_at')
