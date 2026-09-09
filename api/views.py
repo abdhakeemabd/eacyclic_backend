@@ -173,6 +173,36 @@ class UserProfileView(views.APIView):
         
         return Response(UserSerializer(user).data)
 
+# --- ADMIN AUTH ---
+class AdminLoginView(views.APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        username = request.data.get('username')
+        password = request.data.get('password')
+
+        if not username or not password:
+            return Response({'error': 'Username and password are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = authenticate(username=username, password=password)
+
+        if user is None:
+            return Response({'error': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        if not user.is_staff:
+            return Response({'error': 'Access denied. Admin privileges required.'}, status=status.HTTP_403_FORBIDDEN)
+
+        token, _ = Token.objects.get_or_create(user=user)
+        return Response({
+            'token': token.key,
+            'user': {
+                'username': user.username,
+                'email': user.email,
+                'role': 'superadmin' if user.is_superuser else 'admin',
+                'loginTime': timezone.now().isoformat(),
+            }
+        })
+
 # --- ANALYTICS ---
 class AnalyticsViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
