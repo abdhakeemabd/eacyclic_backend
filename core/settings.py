@@ -79,7 +79,8 @@ WSGI_APPLICATION = 'core.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
-_DATABASE_URL = config('DATABASE_URL', default=f'sqlite:///{BASE_DIR / "db.sqlite3"}')
+# Use DATABASE_URL from env, fallback to SQLite if missing or empty
+_DATABASE_URL = config('DATABASE_URL', default='').strip() or f'sqlite:///{BASE_DIR / "db.sqlite3"}'
 
 DATABASES = {
     'default': dj_database_url.parse(
