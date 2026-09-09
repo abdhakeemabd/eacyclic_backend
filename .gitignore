@@ -21,6 +21,7 @@ media/
 staticfiles/
 api/migrations/*
 !api/migrations/__init__.py
+!api/migrations/0001_initial.py
 
 # Python packaging
 *.egg-info/
