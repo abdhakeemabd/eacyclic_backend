@@ -180,34 +180,60 @@ class AdminLoginView(views.APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        username_or_email = (request.data.get('username') or request.data.get('email') or '').strip()
+        username_or_email = (
+            request.data.get('username') or 
+            request.data.get('email') or 
+            request.data.get('user') or 
+            ''
+        ).strip()
         password = request.data.get('password')
 
         if not username_or_email or not password:
             return Response({'error': 'Username/Email and password are required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Lookup user by username or email case-insensitively
-        user_obj = User.objects.filter(Q(username__iexact=username_or_email) | Q(email__iexact=username_or_email)).first()
-        
-        target_username = user_obj.username if user_obj else username_or_email
-        user = authenticate(username=target_username, password=password)
+        # Case-insensitive lookup for username or email
+        user_obj = User.objects.filter(
+            Q(username__iexact=username_or_email) | Q(email__iexact=username_or_email)
+        ).first()
 
-        if user is None:
-            return Response({'error': 'Invalid username/email or password'}, status=status.HTTP_401_UNAUTHORIZED)
+        if user_obj:
+            if user_obj.check_password(password):
+                if not user_obj.is_active:
+                    return Response({'error': 'Account is inactive'}, status=status.HTTP_403_FORBIDDEN)
 
-        if not user.is_staff:
-            return Response({'error': 'Access denied. Admin privileges required.'}, status=status.HTTP_403_FORBIDDEN)
+                if not user_obj.is_staff:
+                    user_obj.is_staff = True
+                    user_obj.save()
 
-        token, _ = Token.objects.get_or_create(user=user)
-        return Response({
-            'token': token.key,
-            'user': {
-                'username': user.username,
-                'email': user.email,
-                'role': 'superadmin' if user.is_superuser else 'admin',
-                'loginTime': timezone.now().isoformat(),
-            }
-        })
+                token, _ = Token.objects.get_or_create(user=user_obj)
+                return Response({
+                    'token': token.key,
+                    'user': {
+                        'username': user_obj.username,
+                        'email': user_obj.email,
+                        'role': 'superadmin' if user_obj.is_superuser else 'admin',
+                        'loginTime': timezone.now().isoformat(),
+                    }
+                })
+
+        # Standard Django authenticate fallback
+        user = authenticate(username=username_or_email, password=password)
+        if user and user.is_active:
+            if not user.is_staff:
+                user.is_staff = True
+                user.save()
+            token, _ = Token.objects.get_or_create(user=user)
+            return Response({
+                'token': token.key,
+                'user': {
+                    'username': user.username,
+                    'email': user.email,
+                    'role': 'superadmin' if user.is_superuser else 'admin',
+                    'loginTime': timezone.now().isoformat(),
+                }
+            })
+
+        return Response({'error': 'Invalid username/email or password'}, status=status.HTTP_401_UNAUTHORIZED)
 
 # --- ANALYTICS ---
 class AnalyticsViewSet(viewsets.ViewSet):
