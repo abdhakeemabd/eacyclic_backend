@@ -150,6 +150,12 @@ if not CORS_ALLOW_ALL_ORIGINS:
     ).split(',')
 
 CORS_ALLOW_CREDENTIALS = True
+
+CSRF_TRUSTED_ORIGINS = config(
+    'CSRF_TRUSTED_ORIGINS',
+    default='https://*.onrender.com,http://localhost:8000,http://127.0.0.1:8000,http://localhost:5173'
+).split(',')
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 REST_FRAMEWORK = {
