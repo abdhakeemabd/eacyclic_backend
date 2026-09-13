@@ -123,6 +123,7 @@ class CartViewSet(viewsets.ViewSet):
 
 # --- AUTH & USER PROFILE ---
 class AuthView(views.APIView):
+    authentication_classes = []
     permission_classes = [AllowAny]
 
     def post(self, request, action=None):
@@ -175,6 +176,7 @@ class UserProfileView(views.APIView):
 
 # --- ADMIN AUTH ---
 class AdminLoginView(views.APIView):
+    authentication_classes = []
     permission_classes = [AllowAny]
 
     def post(self, request):
