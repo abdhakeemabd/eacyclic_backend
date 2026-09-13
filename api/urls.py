@@ -28,6 +28,7 @@ urlpatterns = [
 
     # Admin login (checks is_staff)
     path('admin/login', AdminLoginView.as_view()),
+    path('admin/login/', AdminLoginView.as_view()),
 
     # Dynamic Product Sitemap (for Google indexing of all products)
     path('sitemap-products/', sitemap_products_view, name='sitemap_products'),
