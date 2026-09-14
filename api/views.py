@@ -235,6 +235,37 @@ class AdminLoginView(views.APIView):
 
         return Response({'error': 'Invalid username/email or password'}, status=status.HTTP_401_UNAUTHORIZED)
 
+# --- CHANGE PASSWORD ---
+class ChangePasswordView(views.APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        current_password = request.data.get('current_password', '').strip()
+        new_password = request.data.get('new_password', '').strip()
+        confirm_password = request.data.get('confirm_password', '').strip()
+
+        if not current_password or not new_password or not confirm_password:
+            return Response({'error': 'All fields are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = request.user
+
+        if not user.check_password(current_password):
+            return Response({'error': 'Current password is incorrect.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if new_password != confirm_password:
+            return Response({'error': 'New password and confirm password do not match.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if len(new_password) < 6:
+            return Response({'error': 'New password must be at least 6 characters long.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user.set_password(new_password)
+        user.save()
+
+        # Re-get or create token to maintain session
+        token, _ = Token.objects.get_or_create(user=user)
+
+        return Response({'message': 'Password updated successfully!', 'token': token.key}, status=status.HTTP_200_OK)
+
 # --- ANALYTICS ---
 class AnalyticsViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
