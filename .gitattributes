@@ -1,0 +1,8 @@
+# Force LF line endings for shell scripts (important for Linux deployment on Render)
+*.sh text eol=lf
+
+# Force LF for Python files
+*.py text eol=lf
+
+# Auto-detect everything else
+* text=auto
