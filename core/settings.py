@@ -27,7 +27,8 @@ SECRET_KEY = config('SECRET_KEY', default='django-insecure-rxg4km%cz^##-25h#1i3x
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config('DEBUG', default=False, cast=bool)
 
-ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='*').split(',')
+raw_allowed_hosts = config('ALLOWED_HOSTS', default='*,eacyclic.com,www.eacyclic.com,.onrender.com')
+ALLOWED_HOSTS = [h.strip() for h in raw_allowed_hosts.split(',') if h.strip()]
 
 
 # Application definition
@@ -170,20 +171,19 @@ else:
 
 
 
-CORS_ALLOW_ALL_ORIGINS = config('CORS_ALLOW_ALL_ORIGINS', default=True, cast=bool)
-
-if not CORS_ALLOW_ALL_ORIGINS:
-    CORS_ALLOWED_ORIGINS = config(
-        'CORS_ALLOWED_ORIGINS',
-        default='http://localhost:5173,http://localhost:3000'
-    ).split(',')
+raw_cors_origins = config(
+    'CORS_ALLOWED_ORIGINS',
+    default='http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:3000,https://eacyclic.com,https://www.eacyclic.com'
+)
+CORS_ALLOWED_ORIGINS = [o.strip().rstrip('/') for o in raw_cors_origins.split(',') if o.strip()]
 
 CORS_ALLOW_CREDENTIALS = True
 
-CSRF_TRUSTED_ORIGINS = config(
+raw_csrf_origins = config(
     'CSRF_TRUSTED_ORIGINS',
     default='https://*.onrender.com,http://localhost:8000,http://127.0.0.1:8000,http://localhost:5173,https://eacyclic.com,https://www.eacyclic.com'
-).split(',')
+)
+CSRF_TRUSTED_ORIGINS = [o.strip().rstrip('/') for o in raw_csrf_origins.split(',') if o.strip()]
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
