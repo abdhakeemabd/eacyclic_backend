@@ -179,144 +179,151 @@ class AuthView(views.APIView):
     permission_classes = [AllowAny]
 
     def post(self, request, action=None):
-        if action == 'send-otp':
-            email = (request.data.get('email') or '').strip().lower()
-            if not email:
-                return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            if action == 'send-otp':
+                email = (request.data.get('email') or '').strip().lower()
+                if not email:
+                    return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-            now = timezone.now()
-            # Rate limiting / Cooldown check (60 seconds)
-            recent_otp = OTPToken.objects.filter(email=email, created_at__gte=now - timedelta(seconds=60)).first()
-            if recent_otp:
-                return Response({'error': 'Please wait 60 seconds before requesting another OTP.'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
-
-            # Generate cryptographically secure 6-digit OTP
-            otp_code = ''.join([secrets.choice('0123456789') for _ in range(6)])
-            otp_hash_val = hash_otp(otp_code)
-            expires_at = now + timedelta(minutes=5)
-
-            # Save OTP Token
-            OTPToken.objects.create(
-                email=email,
-                otp_hash=otp_hash_val,
-                expires_at=expires_at
-            )
-
-            # Send Email via Django Mail / SMTP with HTML template
-            subject = 'Your Verification Code - Eacyclic'
-            plain_message = f'Hello,\n\nYour OTP verification code is: {otp_code}\n\nThis code is valid for 5 minutes. Do not share this code with anyone.'
-            html_message = generate_otp_html_email(otp_code)
-            from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', None) or 'noreply@eacyclic.com'
-
-            email_sent = False
-            try:
-                send_mail(
-                    subject=subject,
-                    message=plain_message,
-                    from_email=from_email,
-                    recipient_list=[email],
-                    html_message=html_message,
-                    fail_silently=False
-                )
-                email_sent = True
-            except Exception as e:
-                print(f"[OTP EMAIL DELIVERY ERROR] {e}")
-                print(f"==================================================")
-                print(f"[DEVELOPMENT FALLBACK] OTP FOR {email}: {otp_code}")
-                print(f"==================================================")
-
-            return Response({
-                'message': f'OTP code sent to {email}. Please check your inbox.',
-                'email': email,
-                'expires_in': 300
-            }, status=status.HTTP_200_OK)
-
-
-
-
-
-        elif action == 'verify-otp':
-            email = (request.data.get('email') or '').strip().lower()
-            otp_code = (request.data.get('otp') or '').strip()
-
-            if not email or not otp_code:
-                return Response({'error': 'Email and OTP code are required'}, status=status.HTTP_400_BAD_REQUEST)
-
-            now = timezone.now()
-            otp_token = OTPToken.objects.filter(email=email, is_used=False).order_by('-created_at').first()
-
-            if not otp_token:
-                return Response({'error': 'No OTP request found for this email. Please request a new code.'}, status=status.HTTP_400_BAD_REQUEST)
-
-            if otp_token.expires_at < now:
-                otp_token.is_used = True
-                otp_token.save()
-                return Response({'error': 'OTP code has expired. Please request a new code.'}, status=status.HTTP_400_BAD_REQUEST)
-
-            if otp_token.attempts >= 5:
-                otp_token.is_used = True
-                otp_token.save()
-                return Response({'error': 'Too many failed attempts. Please request a new OTP code.'}, status=status.HTTP_400_BAD_REQUEST)
-
-            # Verify OTP hash
-            if hash_otp(otp_code) != otp_token.otp_hash:
-                otp_token.attempts += 1
-                otp_token.save()
-                remaining_attempts = 5 - otp_token.attempts
-                return Response({'error': f'Invalid OTP code. {remaining_attempts} attempt(s) remaining.'}, status=status.HTTP_400_BAD_REQUEST)
-
-            # Valid OTP!
-            otp_token.is_used = True
-            otp_token.save()
-
-            # Find or Create User
-            user = User.objects.filter(Q(email__iexact=email) | Q(username__iexact=email)).first()
-            if not user:
-                # Auto register user with email as username
-                user = User.objects.create_user(username=email, email=email)
-                UserProfile.objects.create(user=user)
-            elif not hasattr(user, 'profile'):
-                UserProfile.objects.create(user=user)
-
-            token, _ = Token.objects.get_or_create(user=user)
-            return Response({
-                'token': token.key,
-                'user': UserSerializer(user).data,
-                'message': 'Logged in successfully via OTP!'
-            }, status=status.HTTP_200_OK)
-
-        elif action == 'login':
-            username = request.data.get('username') or request.data.get('email')
-            password = request.data.get('password')
-            user = authenticate(username=username, password=password)
-            if user:
-                token, _ = Token.objects.get_or_create(user=user)
-                return Response({'token': token.key, 'user': UserSerializer(user).data})
-            return Response({'error': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
-            
-        elif action == 'register':
-            username = request.data.get('username') or request.data.get('email')
-            email = request.data.get('email')
-            password = request.data.get('password')
-            if User.objects.filter(username=username).exists():
-                return Response({'error': 'Username/Email already exists'}, status=400)
-            
-            user = User.objects.create_user(username=username, email=email, password=password)
-            UserProfile.objects.create(user=user)
-            token = Token.objects.create(user=user)
-            return Response({'token': token.key, 'user': UserSerializer(user).data})
-
-        elif action == 'logout':
-            auth_header = request.headers.get('Authorization', '')
-            if auth_header.startswith('Token '):
-                token_key = auth_header.split(' ')[1]
-                Token.objects.filter(key=token_key).delete()
-            if request.user.is_authenticated and hasattr(request.user, 'auth_token'):
+                now = timezone.now()
+                # Rate limiting / Cooldown check (60 seconds)
                 try:
-                    request.user.auth_token.delete()
-                except Exception:
-                    pass
-            return Response({'status': 'Logged out successfully'})
+                    recent_otp = OTPToken.objects.filter(email=email, created_at__gte=now - timedelta(seconds=60)).first()
+                    if recent_otp:
+                        return Response({'error': 'Please wait 60 seconds before requesting another OTP.'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+                except Exception as db_err:
+                    print(f"[OTP DB ERROR] {db_err}")
+
+                # Generate cryptographically secure 6-digit OTP
+                otp_code = ''.join([secrets.choice('0123456789') for _ in range(6)])
+                otp_hash_val = hash_otp(otp_code)
+                expires_at = now + timedelta(minutes=5)
+
+                # Save OTP Token
+                try:
+                    OTPToken.objects.create(
+                        email=email,
+                        otp_hash=otp_hash_val,
+                        expires_at=expires_at
+                    )
+                except Exception as create_err:
+                    print(f"[OTP TOKEN CREATE ERROR] {create_err}")
+
+                # Send Email via Django Mail / SMTP with HTML template
+                subject = 'Your Verification Code - Eacyclic'
+                plain_message = f'Hello,\n\nYour OTP verification code is: {otp_code}\n\nThis code is valid for 5 minutes. Do not share this code with anyone.'
+                html_message = generate_otp_html_email(otp_code)
+                from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', None) or 'noreply@eacyclic.com'
+
+                email_sent = False
+                try:
+                    send_mail(
+                        subject=subject,
+                        message=plain_message,
+                        from_email=from_email,
+                        recipient_list=[email],
+                        html_message=html_message,
+                        fail_silently=False
+                    )
+                    email_sent = True
+                except Exception as e:
+                    print(f"[OTP EMAIL DELIVERY ERROR] {e}")
+                    print(f"==================================================")
+                    print(f"[DEVELOPMENT FALLBACK] OTP FOR {email}: {otp_code}")
+                    print(f"==================================================")
+
+                return Response({
+                    'message': f'OTP code sent to {email}. Please check your inbox.',
+                    'email': email,
+                    'expires_in': 300
+                }, status=status.HTTP_200_OK)
+
+            elif action == 'verify-otp':
+                email = (request.data.get('email') or '').strip().lower()
+                otp_code = (request.data.get('otp') or '').strip()
+
+                if not email or not otp_code:
+                    return Response({'error': 'Email and OTP code are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+                now = timezone.now()
+                otp_token = OTPToken.objects.filter(email=email, is_used=False).order_by('-created_at').first()
+
+                if not otp_token:
+                    return Response({'error': 'No OTP request found for this email. Please request a new code.'}, status=status.HTTP_400_BAD_REQUEST)
+
+                if otp_token.expires_at < now:
+                    otp_token.is_used = True
+                    otp_token.save()
+                    return Response({'error': 'OTP code has expired. Please request a new code.'}, status=status.HTTP_400_BAD_REQUEST)
+
+                if otp_token.attempts >= 5:
+                    otp_token.is_used = True
+                    otp_token.save()
+                    return Response({'error': 'Too many failed attempts. Please request a new OTP code.'}, status=status.HTTP_400_BAD_REQUEST)
+
+                # Verify OTP hash
+                if hash_otp(otp_code) != otp_token.otp_hash:
+                    otp_token.attempts += 1
+                    otp_token.save()
+                    remaining_attempts = 5 - otp_token.attempts
+                    return Response({'error': f'Invalid OTP code. {remaining_attempts} attempt(s) remaining.'}, status=status.HTTP_400_BAD_REQUEST)
+
+                # Valid OTP!
+                otp_token.is_used = True
+                otp_token.save()
+
+                # Find or Create User
+                user = User.objects.filter(Q(email__iexact=email) | Q(username__iexact=email)).first()
+                if not user:
+                    # Auto register user with email as username
+                    user = User.objects.create_user(username=email, email=email)
+                    UserProfile.objects.create(user=user)
+                elif not hasattr(user, 'profile'):
+                    UserProfile.objects.create(user=user)
+
+                token, _ = Token.objects.get_or_create(user=user)
+                return Response({
+                    'token': token.key,
+                    'user': UserSerializer(user).data,
+                    'message': 'Logged in successfully via OTP!'
+                }, status=status.HTTP_200_OK)
+
+            elif action == 'login':
+                username = request.data.get('username') or request.data.get('email')
+                password = request.data.get('password')
+                user = authenticate(username=username, password=password)
+                if user:
+                    token, _ = Token.objects.get_or_create(user=user)
+                    return Response({'token': token.key, 'user': UserSerializer(user).data})
+                return Response({'error': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+                
+            elif action == 'register':
+                username = request.data.get('username') or request.data.get('email')
+                email = request.data.get('email')
+                password = request.data.get('password')
+                if User.objects.filter(username=username).exists():
+                    return Response({'error': 'Username/Email already exists'}, status=400)
+                
+                user = User.objects.create_user(username=username, email=email, password=password)
+                UserProfile.objects.create(user=user)
+                token = Token.objects.create(user=user)
+                return Response({'token': token.key, 'user': UserSerializer(user).data})
+
+            elif action == 'logout':
+                auth_header = request.headers.get('Authorization', '')
+                if auth_header.startswith('Token '):
+                    token_key = auth_header.split(' ')[1]
+                    Token.objects.filter(key=token_key).delete()
+                if request.user.is_authenticated and hasattr(request.user, 'auth_token'):
+                    try:
+                        request.user.auth_token.delete()
+                    except Exception:
+                        pass
+                return Response({'status': 'Logged out successfully'})
+        except Exception as general_err:
+            import traceback
+            traceback.print_exc()
+            return Response({'error': f'Internal Server Error: {str(general_err)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 
