@@ -12,11 +12,28 @@ from datetime import timedelta
 import secrets
 import hashlib
 from django.core.mail import send_mail
-from django.conf import settings
-
+from django.http import JsonResponse
 from .models import Product, Order, Contact, UserProfile, Cart, CartItem, Delivery, OTPToken
 from .serializers import (ProductSerializer, OrderSerializer, ContactSerializer,
                           UserSerializer, CartSerializer, CartItemSerializer, DeliverySerializer)
+
+def custom_500_handler(request, *args, **kwargs):
+    response = JsonResponse({'error': 'Internal Server Error'}, status=500)
+    response['Access-Control-Allow-Origin'] = '*'
+    response['Access-Control-Allow-Headers'] = '*'
+    response['Access-Control-Allow-Methods'] = '*'
+    return response
+
+def custom_exception_handler(exc, context):
+    from rest_framework.views import exception_handler
+    response = exception_handler(exc, context)
+    if response is None:
+        import traceback
+        traceback.print_exc()
+        res = Response({'error': f'Server Error: {str(exc)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        res['Access-Control-Allow-Origin'] = '*'
+        return res
+    return response
 
 def hash_otp(otp_code):
     return hashlib.sha256(f"{settings.SECRET_KEY}:{otp_code}".encode()).hexdigest()
@@ -223,7 +240,7 @@ class AuthView(views.APIView):
                         from_email=from_email,
                         recipient_list=[email],
                         html_message=html_message,
-                        fail_silently=False
+                        fail_silently=True
                     )
                     email_sent = True
                 except Exception as e:
