@@ -81,8 +81,11 @@ WSGI_APPLICATION = 'core.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
-# Use DATABASE_URL from env, fallback to SQLite if missing or empty
-_DATABASE_URL = config('DATABASE_URL', default='').strip() or f'sqlite:///{BASE_DIR / "db.sqlite3"}'
+_DATABASE_URL = config('DATABASE_URL', default='').strip()
+if 'channel_binding' in _DATABASE_URL:
+    _DATABASE_URL = _DATABASE_URL.replace('&channel_binding=require', '').replace('?channel_binding=require', '')
+if not _DATABASE_URL:
+    _DATABASE_URL = f'sqlite:///{BASE_DIR / "db.sqlite3"}'
 
 use_sqlite = False
 if _DATABASE_URL.startswith('postgres'):
