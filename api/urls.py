@@ -22,6 +22,7 @@ urlpatterns = [
     
     # Auth paths
     path('auth/<str:action>', AuthView.as_view()),
+    path('auth/<str:action>/', AuthView.as_view()),
     
     # User Profile path
     path('user/profile', UserProfileView.as_view()),
