@@ -47,10 +47,10 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -171,11 +171,19 @@ else:
 
 
 
+CORS_ALLOW_ALL_ORIGINS = config('CORS_ALLOW_ALL_ORIGINS', default=True, cast=bool)
+
 raw_cors_origins = config(
     'CORS_ALLOWED_ORIGINS',
     default='http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:3000,https://eacyclic.com,https://www.eacyclic.com'
 )
 CORS_ALLOWED_ORIGINS = [o.strip().rstrip('/') for o in raw_cors_origins.split(',') if o.strip()]
+
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://.*\.eacyclic\.com$",
+    r"^https://eacyclic\.com$",
+    r"^https://.*\.onrender\.com$",
+]
 
 CORS_ALLOW_CREDENTIALS = True
 
