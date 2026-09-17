@@ -155,8 +155,18 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedStaticFilesStorage'
 
 
 # Email Configuration
-# If valid EMAIL_HOST_USER & EMAIL_HOST_PASSWORD are set in backend/.env, sends real emails via SMTP.
-# Otherwise, falls back to Console EmailBackend (prints full formatted email to python manage.py terminal).
+# Render free tier BLOCKS outbound SMTP (port 587/465) — OSError: [Errno 101] Network is unreachable
+# Solution: Use Resend HTTP API (free 3000 emails/month, no SMTP needed)
+# Sign up at https://resend.com — get an API key — add it to Render env vars.
+#
+# Priority:
+#   1. RESEND_API_KEY set  → use Resend HTTP API (works on Render free tier)
+#   2. EMAIL creds set     → use SMTP (works locally, NOT on Render free tier)
+#   3. Neither set         → Console backend (prints to terminal/logs)
+
+RESEND_API_KEY = config('RESEND_API_KEY', default='').strip()
+RESEND_FROM_EMAIL = config('RESEND_FROM_EMAIL', default='Eacyclic <noreply@eacyclic.com>').strip()
+
 _email_user = config('EMAIL_HOST_USER', default='').strip()
 _email_pass = config('EMAIL_HOST_PASSWORD', default='').strip()
 
@@ -167,7 +177,7 @@ if _email_user and _email_pass and not _email_user.startswith('your_'):
     EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
     EMAIL_HOST_USER = _email_user
     EMAIL_HOST_PASSWORD = _email_pass
-    EMAIL_TIMEOUT = 30  # 30s is safe for Render cold-start + Gmail SMTP TLS handshake
+    EMAIL_TIMEOUT = 30
     DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default=_email_user)
 else:
     EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'

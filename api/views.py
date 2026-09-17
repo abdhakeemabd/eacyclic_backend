@@ -227,50 +227,74 @@ class AuthView(views.APIView):
                 except Exception as create_err:
                     print(f"[OTP TOKEN CREATE ERROR] {create_err}")
 
-                # Send Email via Django Mail / SMTP with HTML template
+                # Send OTP Email
+                # Render free tier blocks SMTP → use Resend HTTP API as primary method
                 subject = 'Your Verification Code - Eacyclic'
                 plain_message = f'Hello,\n\nYour OTP verification code is: {otp_code}\n\nThis code is valid for 5 minutes. Do not share this code with anyone.'
                 html_message = generate_otp_html_email(otp_code)
-                from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', None) or 'noreply@eacyclic.com'
 
                 email_sent = False
                 email_error = None
-                try:
-                    backend_used = getattr(settings, 'EMAIL_BACKEND', '')
-                    print(f"[OTP EMAIL] Sending OTP to {email} via backend: {backend_used}")
-                    print(f"[OTP EMAIL] From: {from_email}")
-                    send_mail(
-                        subject=subject,
-                        message=plain_message,
-                        from_email=from_email,
-                        recipient_list=[email],
-                        html_message=html_message,
-                        fail_silently=False  # Raise exceptions so we can detect failures
-                    )
-                    email_sent = True
-                    print(f"[OTP EMAIL] Successfully sent to {email}")
-                except Exception as e:
-                    import traceback
-                    email_error = str(e)
-                    print(f"[OTP EMAIL ERROR] Failed to send email to {email}")
-                    print(f"[OTP EMAIL ERROR] Exception: {e}")
-                    traceback.print_exc()
-                    print(f"==================================================")
-                    print(f"[OTP FALLBACK] OTP FOR {email}: {otp_code}")
-                    print(f"==================================================")
 
-                # Always return success to the client (OTP is saved in DB)
-                # The OTP is valid regardless of whether the email was delivered.
-                # Check Render logs if email is not received.
-                response_data = {
+                resend_api_key = getattr(settings, 'RESEND_API_KEY', '').strip()
+
+                if resend_api_key:
+                    # --- PRIMARY: Resend HTTP API (works on Render free tier) ---
+                    try:
+                        import resend
+                        resend.api_key = resend_api_key
+                        from_addr = getattr(settings, 'RESEND_FROM_EMAIL', 'Eacyclic <noreply@eacyclic.com>')
+                        print(f"[OTP EMAIL] Sending via Resend API to {email} from {from_addr}")
+                        params = {
+                            "from": from_addr,
+                            "to": [email],
+                            "subject": subject,
+                            "html": html_message,
+                            "text": plain_message,
+                        }
+                        r = resend.Emails.send(params)
+                        print(f"[OTP EMAIL] Resend response: {r}")
+                        email_sent = True
+                        print(f"[OTP EMAIL] Successfully sent to {email} via Resend")
+                    except Exception as e:
+                        import traceback
+                        email_error = str(e)
+                        print(f"[OTP EMAIL ERROR] Resend failed: {e}")
+                        traceback.print_exc()
+                else:
+                    # --- FALLBACK: Django SMTP (works locally, blocked on Render free tier) ---
+                    from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', None) or 'noreply@eacyclic.com'
+                    try:
+                        backend_used = getattr(settings, 'EMAIL_BACKEND', '')
+                        print(f"[OTP EMAIL] Sending via SMTP to {email}, backend={backend_used}")
+                        send_mail(
+                            subject=subject,
+                            message=plain_message,
+                            from_email=from_email,
+                            recipient_list=[email],
+                            html_message=html_message,
+                            fail_silently=False,
+                        )
+                        email_sent = True
+                        print(f"[OTP EMAIL] Successfully sent to {email} via SMTP")
+                    except Exception as e:
+                        import traceback
+                        email_error = str(e)
+                        print(f"[OTP EMAIL ERROR] SMTP failed: {e}")
+                        traceback.print_exc()
+
+                if not email_sent:
+                    print(f"=================================================")
+                    print(f"[OTP FALLBACK] EMAIL FAILED — OTP FOR {email}: {otp_code}")
+                    print(f"[OTP FALLBACK] Error: {email_error}")
+                    print(f"=================================================")
+
+                return Response({
                     'message': f'OTP code sent to {email}. Please check your inbox.',
                     'email': email,
                     'expires_in': 300
-                }
-                if not email_sent and email_error:
-                    # Include a hint in non-production or for debugging
-                    print(f"[OTP WARNING] Email delivery failed but OTP is in DB. Error: {email_error}")
-                return Response(response_data, status=status.HTTP_200_OK)
+                }, status=status.HTTP_200_OK)
+
 
             elif action == 'verify-otp':
                 email = (request.data.get('email') or '').strip().lower()

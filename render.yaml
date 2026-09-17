@@ -32,3 +32,8 @@ services:
         sync: false
       - key: DEFAULT_FROM_EMAIL
         sync: false
+      # Resend API (replaces SMTP — works on Render free tier)
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        value: "Eacyclic <noreply@eacyclic.com>"
