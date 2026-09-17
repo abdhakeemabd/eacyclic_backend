@@ -11,6 +11,6 @@ echo "==> Collecting static files..."
 python manage.py collectstatic --noinput
 
 echo "==> Creating superuser..."
-python manage.py createsuperuser --noinput || true
+python create_superuser.py
 
 echo "==> Build complete!"
