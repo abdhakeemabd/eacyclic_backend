@@ -167,7 +167,7 @@ if _email_user and _email_pass and not _email_user.startswith('your_'):
     EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
     EMAIL_HOST_USER = _email_user
     EMAIL_HOST_PASSWORD = _email_pass
-    EMAIL_TIMEOUT = 5
+    EMAIL_TIMEOUT = 30  # 30s is safe for Render cold-start + Gmail SMTP TLS handshake
     DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default=_email_user)
 else:
     EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'

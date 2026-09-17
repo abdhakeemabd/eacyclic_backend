@@ -234,27 +234,43 @@ class AuthView(views.APIView):
                 from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', None) or 'noreply@eacyclic.com'
 
                 email_sent = False
+                email_error = None
                 try:
+                    backend_used = getattr(settings, 'EMAIL_BACKEND', '')
+                    print(f"[OTP EMAIL] Sending OTP to {email} via backend: {backend_used}")
+                    print(f"[OTP EMAIL] From: {from_email}")
                     send_mail(
                         subject=subject,
                         message=plain_message,
                         from_email=from_email,
                         recipient_list=[email],
                         html_message=html_message,
-                        fail_silently=True
+                        fail_silently=False  # Raise exceptions so we can detect failures
                     )
                     email_sent = True
+                    print(f"[OTP EMAIL] Successfully sent to {email}")
                 except Exception as e:
-                    print(f"[OTP EMAIL DELIVERY ERROR] {e}")
+                    import traceback
+                    email_error = str(e)
+                    print(f"[OTP EMAIL ERROR] Failed to send email to {email}")
+                    print(f"[OTP EMAIL ERROR] Exception: {e}")
+                    traceback.print_exc()
                     print(f"==================================================")
-                    print(f"[DEVELOPMENT FALLBACK] OTP FOR {email}: {otp_code}")
+                    print(f"[OTP FALLBACK] OTP FOR {email}: {otp_code}")
                     print(f"==================================================")
 
-                return Response({
+                # Always return success to the client (OTP is saved in DB)
+                # The OTP is valid regardless of whether the email was delivered.
+                # Check Render logs if email is not received.
+                response_data = {
                     'message': f'OTP code sent to {email}. Please check your inbox.',
                     'email': email,
                     'expires_in': 300
-                }, status=status.HTTP_200_OK)
+                }
+                if not email_sent and email_error:
+                    # Include a hint in non-production or for debugging
+                    print(f"[OTP WARNING] Email delivery failed but OTP is in DB. Error: {email_error}")
+                return Response(response_data, status=status.HTTP_200_OK)
 
             elif action == 'verify-otp':
                 email = (request.data.get('email') or '').strip().lower()
