@@ -172,7 +172,7 @@ def generate_otp_html_email(otp_code):
             </div>
             
             <!-- OTP Badge -->
-            <div style="background: #fff7ed; border: 1.5px solid #ffedd5; border-radius: 16px; padding: 4px 2px; margin: 0 auto 28px auto; text-align: center;">
+            <div style="background: #fff7ed; border: 1.5px solid #ffedd5; border-radius: 16px; padding: 8px 12px; margin: 0 auto 28px auto; text-align: center;">
                 <div style="font-size: 24px; font-weight: 900; letter-spacing: 12px; color: #000000; font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, monospace; margin-left: 12px;">{otp_code}</div>
                 <div style="display: inline-block; background-color: #ffedd5; color: #c2410c; font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 20px; margin-top: 14px;">Valid for 5 minutes</div>
             </div>
