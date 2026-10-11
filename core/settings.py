@@ -209,9 +209,11 @@ CSRF_TRUSTED_ORIGINS = [o.strip().rstrip('/') for o in raw_csrf_origins.split(',
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+TOKEN_EXPIRE_HOURS = 24
+
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework.authentication.TokenAuthentication',
+        'api.authentication.ExpiringTokenAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [

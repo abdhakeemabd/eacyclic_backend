@@ -1,7 +1,8 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (ProductViewSet, OrderViewSet, ContactViewSet, DeliveryViewSet, 
-                    CartViewSet, AuthView, UserProfileView, AnalyticsViewSet, AdminLoginView, ChangePasswordView, force_superuser_view)
+                    CartViewSet, AuthView, UserProfileView, AnalyticsViewSet, 
+                    AdminLoginView, AdminLogoutView, AdminLogoutAllView, ChangePasswordView)
 from .sitemap import sitemap_products_view
 
 router = DefaultRouter(trailing_slash=False)
@@ -27,13 +28,16 @@ urlpatterns = [
     # User Profile path
     path('user/profile', UserProfileView.as_view()),
 
-    # Admin login & change password
+    # Admin login, logout & password management
     path('admin/login', AdminLoginView.as_view()),
     path('admin/login/', AdminLoginView.as_view()),
+    path('admin/logout', AdminLogoutView.as_view()),
+    path('admin/logout/', AdminLogoutView.as_view()),
+    path('admin/logout-all', AdminLogoutAllView.as_view()),
+    path('admin/logout-all/', AdminLogoutAllView.as_view()),
     path('admin/change-password', ChangePasswordView.as_view()),
     path('admin/change-password/', ChangePasswordView.as_view()),
 
     # Dynamic Product Sitemap (for Google indexing of all products)
     path('sitemap-products/', sitemap_products_view, name='sitemap_products'),
-    path('force-superuser/', force_superuser_view, name='force_superuser'),
 ]

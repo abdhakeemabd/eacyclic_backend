@@ -36,6 +36,33 @@ def custom_exception_handler(exc, context):
         return res
     return response
 
+from django.contrib.sessions.models import Session
+
+def flush_user_sessions(user):
+    """Terminates all active Django session records for the specified user."""
+    try:
+        user_id_str = str(user.id)
+        for session in Session.objects.all():
+            try:
+                data = session.get_decoded()
+                if str(data.get('_auth_user_id')) == user_id_str:
+                    session.delete()
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[SESSION FLUSH NOTICE] {e}")
+
+from .permissions import (IsAdminUserOnly, IsAdminOrReadOnly, 
+                          IsAdminOrContactSubmit, IsAdminOrOrderPlacement)
+
+def issue_fresh_token(user):
+    """
+    Enforces logout from all other devices on new login and generates a brand new 
+    token with a full 24-hour lifespan starting from right now.
+    """
+    Token.objects.filter(user=user).delete()
+    return Token.objects.create(user=user)
+
 def hash_otp(otp_code):
     return hashlib.sha256(f"{settings.SECRET_KEY}:{otp_code}".encode()).hexdigest()
 
@@ -45,11 +72,13 @@ def hash_otp(otp_code):
 class ProductViewSet(viewsets.ModelViewSet):
     queryset = Product.objects.all().order_by('-created_at')
     serializer_class = ProductSerializer
+    permission_classes = [IsAdminOrReadOnly]
 
 
 class ContactViewSet(viewsets.ModelViewSet):
     queryset = Contact.objects.all().order_by('-created_at')
     serializer_class = ContactSerializer
+    permission_classes = [IsAdminOrContactSubmit]
 
     @action(detail=True, methods=['patch'])
     def read(self, request, pk=None):
@@ -62,6 +91,7 @@ class ContactViewSet(viewsets.ModelViewSet):
 class OrderViewSet(viewsets.ModelViewSet):
     queryset = Order.objects.all().order_by('-created_at')
     serializer_class = OrderSerializer
+    permission_classes = [IsAdminOrOrderPlacement]
 
     @action(detail=True, methods=['patch'])
     def status(self, request, pk=None):
@@ -80,6 +110,7 @@ class OrderViewSet(viewsets.ModelViewSet):
 class DeliveryViewSet(viewsets.ModelViewSet):
     queryset = Delivery.objects.all().order_by('-updated_at')
     serializer_class = DeliverySerializer
+    permission_classes = [IsAuthenticated, IsAdminUserOnly]
 
     @action(detail=True, methods=['patch'])
     def status(self, request, pk=None):
@@ -339,7 +370,7 @@ class AuthView(views.APIView):
                 elif not hasattr(user, 'profile'):
                     UserProfile.objects.create(user=user)
 
-                token, _ = Token.objects.get_or_create(user=user)
+                token = issue_fresh_token(user)
                 return Response({
                     'token': token.key,
                     'user': UserSerializer(user).data,
@@ -351,7 +382,7 @@ class AuthView(views.APIView):
                 password = request.data.get('password')
                 user = authenticate(username=username, password=password)
                 if user:
-                    token, _ = Token.objects.get_or_create(user=user)
+                    token = issue_fresh_token(user)
                     return Response({'token': token.key, 'user': UserSerializer(user).data})
                 return Response({'error': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
                 
@@ -364,19 +395,35 @@ class AuthView(views.APIView):
                 
                 user = User.objects.create_user(username=username, email=email, password=password)
                 UserProfile.objects.create(user=user)
-                token = Token.objects.create(user=user)
+                token = issue_fresh_token(user)
                 return Response({'token': token.key, 'user': UserSerializer(user).data})
 
             elif action == 'logout':
-                auth_header = request.headers.get('Authorization', '')
-                if auth_header.startswith('Token '):
-                    token_key = auth_header.split(' ')[1]
-                    Token.objects.filter(key=token_key).delete()
-                if request.user.is_authenticated and hasattr(request.user, 'auth_token'):
-                    try:
-                        request.user.auth_token.delete()
-                    except Exception:
-                        pass
+                if request.user.is_authenticated:
+                    Token.objects.filter(user=request.user).delete()
+                    flush_user_sessions(request.user)
+                else:
+                    auth_header = request.headers.get('Authorization', '')
+                    if auth_header.startswith('Token '):
+                        token_key = auth_header.split(' ')[1]
+                        Token.objects.filter(key=token_key).delete()
+                return Response({'status': 'Logged out successfully'})
+
+            elif action in ['logout-all', 'logout_all']:
+                target_user = None
+                if request.user.is_authenticated:
+                    target_user = request.user
+                else:
+                    auth_header = request.headers.get('Authorization', '')
+                    if auth_header.startswith('Token '):
+                        token_key = auth_header.split(' ')[1]
+                        token_obj = Token.objects.filter(key=token_key).select_related('user').first()
+                        if token_obj:
+                            target_user = token_obj.user
+                if target_user:
+                    Token.objects.filter(user=target_user).delete()
+                    flush_user_sessions(target_user)
+                    return Response({'status': 'Successfully logged out from all devices and sessions.'})
                 return Response({'status': 'Logged out successfully'})
         except Exception as general_err:
             import traceback
@@ -430,54 +477,67 @@ class AdminLoginView(views.APIView):
             request.data.get('user') or 
             ''
         ).strip()
-        password = request.data.get('password')
+        password = (request.data.get('password') or '').strip()
 
         if not username_or_email or not password:
-            return Response({'error': 'Username/Email and password are required'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Username/Email and password are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Case-insensitive lookup for username or email
+        # Lookup user by username or email
         user_obj = User.objects.filter(
             Q(username__iexact=username_or_email) | Q(email__iexact=username_or_email)
         ).first()
 
-        if user_obj:
-            if user_obj.check_password(password):
-                if not user_obj.is_active:
-                    return Response({'error': 'Account is inactive'}, status=status.HTTP_403_FORBIDDEN)
+        user = None
+        if user_obj and user_obj.check_password(password):
+            user = user_obj
+        else:
+            user = authenticate(username=username_or_email, password=password)
 
-                if not user_obj.is_staff:
-                    user_obj.is_staff = True
-                    user_obj.save()
+        if not user:
+            return Response({'error': 'Invalid username/email or password.'}, status=status.HTTP_401_UNAUTHORIZED)
 
-                token, _ = Token.objects.get_or_create(user=user_obj)
-                return Response({
-                    'token': token.key,
-                    'user': {
-                        'username': user_obj.username,
-                        'email': user_obj.email,
-                        'role': 'superadmin' if user_obj.is_superuser else 'admin',
-                        'loginTime': timezone.now().isoformat(),
-                    }
-                })
+        if not user.is_active:
+            return Response({'error': 'This account has been deactivated.'}, status=status.HTTP_403_FORBIDDEN)
 
-        # Standard Django authenticate fallback
-        user = authenticate(username=username_or_email, password=password)
-        if user and user.is_active:
-            if not user.is_staff:
-                user.is_staff = True
-                user.save()
-            token, _ = Token.objects.get_or_create(user=user)
+        # STRICT PRIVILEGE CHECK: Under NO circumstances promote non-staff or allow customer accounts
+        if not (user.is_staff or user.is_superuser):
             return Response({
-                'token': token.key,
-                'user': {
-                    'username': user.username,
-                    'email': user.email,
-                    'role': 'superadmin' if user.is_superuser else 'admin',
-                    'loginTime': timezone.now().isoformat(),
-                }
-            })
+                'error': 'Access denied. Administrator privileges are required to access this portal.'
+            }, status=status.HTTP_403_FORBIDDEN)
 
-        return Response({'error': 'Invalid username/email or password'}, status=status.HTTP_401_UNAUTHORIZED)
+        token = issue_fresh_token(user)
+        return Response({
+            'token': token.key,
+            'user': {
+                'username': user.username,
+                'email': user.email,
+                'role': 'superadmin' if user.is_superuser else 'admin',
+                'loginTime': timezone.now().isoformat(),
+            }
+        })
+
+
+class AdminLogoutView(views.APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        Token.objects.filter(user=user).delete()
+        flush_user_sessions(user)
+        return Response({'message': 'Logged out successfully.'}, status=status.HTTP_200_OK)
+
+
+class AdminLogoutAllView(views.APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        # Revoke all tokens across all devices
+        Token.objects.filter(user=user).delete()
+        # Invalidate all server sessions
+        flush_user_sessions(user)
+        return Response({'message': 'Successfully logged out from all devices.'}, status=status.HTTP_200_OK)
+
 
 # --- CHANGE PASSWORD ---
 class ChangePasswordView(views.APIView):
@@ -499,19 +559,37 @@ class ChangePasswordView(views.APIView):
         if new_password != confirm_password:
             return Response({'error': 'New password and confirm password do not match.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if len(new_password) < 6:
-            return Response({'error': 'New password must be at least 6 characters long.'}, status=status.HTTP_400_BAD_REQUEST)
+        if len(new_password) < 8:
+            return Response({'error': 'New password must be at least 8 characters long.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Enforce Django password validators
+        from django.contrib.auth.password_validation import validate_password
+        from django.core.exceptions import ValidationError
+        try:
+            validate_password(new_password, user=user)
+        except ValidationError as e:
+            return Response({'error': ' '.join(e.messages)}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Set new password
         user.set_password(new_password)
         user.save()
 
-        # Re-get or create token to maintain session
-        token, _ = Token.objects.get_or_create(user=user)
+        # LOGOUT EVERYWHERE:
+        # Invalidate existing token(s) and sessions across all devices
+        flush_user_sessions(user)
 
-        return Response({'message': 'Password updated successfully!', 'token': token.key}, status=status.HTTP_200_OK)
+        # Generate a fresh token for the current active session (24h lifespan)
+        new_token = issue_fresh_token(user)
+
+        return Response({
+            'message': 'Password updated successfully! All other sessions and devices have been logged out.',
+            'token': new_token.key
+        }, status=status.HTTP_200_OK)
 
 # --- ANALYTICS ---
 class AnalyticsViewSet(viewsets.ViewSet):
+    permission_classes = [IsAuthenticated, IsAdminUserOnly]
+
     @action(detail=False, methods=['get'])
     def dashboard(self, request):
         total_orders = Order.objects.count()
@@ -524,23 +602,4 @@ class AnalyticsViewSet(viewsets.ViewSet):
             'total_products': total_products,
             'recent_orders': recent_orders
         })
-
-from django.http import JsonResponse
-import os
-
-def force_superuser_view(request):
-    username = os.environ.get('DJANGO_SUPERUSER_USERNAME', 'superadmin')
-    password = os.environ.get('DJANGO_SUPERUSER_PASSWORD', 'superadmin@123')
-    email = os.environ.get('DJANGO_SUPERUSER_EMAIL', 'admin@example.com')
-    
-    user = User.objects.filter(username=username).first()
-    if user:
-        user.set_password(password)
-        user.is_superuser = True
-        user.is_staff = True
-        user.save()
-        return JsonResponse({'status': f'Success: Password updated for {username}'})
-    else:
-        User.objects.create_superuser(username=username, email=email, password=password)
-        return JsonResponse({'status': f'Success: Superuser {username} created'})
 

@@ -1,29 +1,35 @@
 import os
 import django
+from decouple import config
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
 django.setup()
 
 from django.contrib.auth import get_user_model
+from rest_framework.authtoken.models import Token
 
 User = get_user_model()
 
-username = os.environ.get('DJANGO_SUPERUSER_USERNAME')
-password = os.environ.get('DJANGO_SUPERUSER_PASSWORD')
-email = os.environ.get('DJANGO_SUPERUSER_EMAIL', 'admin@example.com')
+# Read superuser credentials strictly from server environment or .env
+username = config('DJANGO_SUPERUSER_USERNAME', default=os.environ.get('DJANGO_SUPERUSER_USERNAME', '')).strip()
+password = config('DJANGO_SUPERUSER_PASSWORD', default=os.environ.get('DJANGO_SUPERUSER_PASSWORD', '')).strip()
+email = config('DJANGO_SUPERUSER_EMAIL', default=os.environ.get('DJANGO_SUPERUSER_EMAIL', 'admin@eacyclic.com')).strip()
 
 if username and password:
-    if not User.objects.filter(username=username).exists():
-        print(f"Creating superuser {username}...")
-        User.objects.create_superuser(username=username, email=email, password=password)
-        print("Superuser created successfully.")
-    else:
-        print(f"Superuser {username} already exists. Updating password just in case...")
-        user = User.objects.get(username=username)
-        user.set_password(password)
-        user.is_superuser = True
-        user.is_staff = True
-        user.save()
-        print("Password updated successfully.")
+    user, created = User.objects.get_or_create(username=username, defaults={'email': email})
+    user.set_password(password)
+    user.is_superuser = True
+    user.is_staff = True
+    user.is_active = True
+    if email:
+        user.email = email
+    user.save()
+
+    # Security best practice: Invalidate existing tokens on credential update so previous sessions are revoked
+    Token.objects.filter(user=user).delete()
+
+    action = "created" if created else "updated"
+    print(f"[SECURITY] Superuser '{username}' {action} successfully from server environment variables.")
 else:
-    print("DJANGO_SUPERUSER_USERNAME or DJANGO_SUPERUSER_PASSWORD missing. Skipping superuser creation.")
+    print("[SECURITY NOTICE] DJANGO_SUPERUSER_USERNAME or DJANGO_SUPERUSER_PASSWORD is not set in server environment.")
+    print("[SECURITY NOTICE] Superuser creation skipped. Set these environment variables in your server configuration.")
