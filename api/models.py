@@ -11,6 +11,9 @@ class Product(models.Model):
     isActive = models.BooleanField(default=True)
     freeShipping = models.BooleanField(default=True)
     gallery = models.JSONField(default=list, blank=True, null=True)
+    sizes = models.JSONField(default=list, blank=True, null=True)
+    colors = models.JSONField(default=list, blank=True, null=True)
+    variants = models.JSONField(default=list, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -36,6 +39,8 @@ class OrderItem(models.Model):
     order = models.ForeignKey(Order, related_name='items', on_delete=models.CASCADE)
     product_id = models.IntegerField(null=True, blank=True)
     product_name = models.CharField(max_length=255)
+    selected_size = models.CharField(max_length=50, blank=True, null=True, default='')
+    selected_color = models.CharField(max_length=50, blank=True, null=True, default='')
     quantity = models.IntegerField(default=1)
     price = models.DecimalField(max_digits=10, decimal_places=2)
 
@@ -76,6 +81,8 @@ class Cart(models.Model):
 class CartItem(models.Model):
     cart = models.ForeignKey(Cart, related_name='items', on_delete=models.CASCADE)
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    selected_size = models.CharField(max_length=50, blank=True, null=True, default='')
+    selected_color = models.CharField(max_length=50, blank=True, null=True, default='')
     quantity = models.IntegerField(default=1)
     
     def __str__(self):

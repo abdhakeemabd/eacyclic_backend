@@ -142,15 +142,21 @@ class CartViewSet(viewsets.ViewSet):
         cart = self.get_cart(request.user)
         product_id = request.data.get('product_id')
         quantity = int(request.data.get('quantity', 1))
+        selected_size = request.data.get('selected_size', '') or ''
+        selected_color = request.data.get('selected_color', '') or ''
         
         try:
             product = Product.objects.get(id=product_id)
-            cart_item, created = CartItem.objects.get_or_create(cart=cart, product=product)
+            cart_item, created = CartItem.objects.get_or_create(
+                cart=cart, 
+                product=product,
+                selected_size=selected_size,
+                selected_color=selected_color,
+                defaults={'quantity': quantity}
+            )
             if not created:
                 cart_item.quantity += quantity
-            else:
-                cart_item.quantity = quantity
-            cart_item.save()
+                cart_item.save()
             return Response({'status': 'Product added to cart'})
         except Product.DoesNotExist:
             return Response({'error': 'Product not found'}, status=404)
@@ -164,20 +170,25 @@ class CartViewSet(viewsets.ViewSet):
     # For individual cart items (PUT/DELETE)
     def update_item(self, request, pk=None):
         try:
-            item = CartItem.objects.get(product__id=pk, cart__user=request.user)
+            # Check by cart item ID first, then product ID
+            item = CartItem.objects.filter(cart__user=request.user).filter(Q(id=pk) | Q(product__id=pk)).first()
+            if not item:
+                return Response({'error': 'Item not in cart'}, status=404)
             item.quantity = int(request.data.get('quantity', 1))
             item.save()
             return Response({'status': 'Quantity updated'})
-        except CartItem.DoesNotExist:
-            return Response({'error': 'Item not in cart'}, status=404)
+        except Exception as e:
+            return Response({'error': str(e)}, status=400)
 
     def destroy_item(self, request, pk=None):
         try:
-            item = CartItem.objects.get(product__id=pk, cart__user=request.user)
+            item = CartItem.objects.filter(cart__user=request.user).filter(Q(id=pk) | Q(product__id=pk)).first()
+            if not item:
+                return Response({'error': 'Item not in cart'}, status=404)
             item.delete()
             return Response({'status': 'Item removed'})
-        except CartItem.DoesNotExist:
-            return Response({'error': 'Item not in cart'}, status=404)
+        except Exception as e:
+            return Response({'error': str(e)}, status=400)
 
 def generate_otp_html_email(otp_code):
     return f"""<!DOCTYPE html>
