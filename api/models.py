@@ -18,18 +18,22 @@ class Product(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     def save(self, *args, **kwargs):
-        # Auto-compute discount if old_price and price are given
-        if self.old_price and self.price and self.old_price > self.price and (not self.discount or self.discount == 0):
-            try:
-                self.discount = round(((float(self.old_price) - float(self.price)) / float(self.old_price)) * 100, 2)
-            except Exception:
-                pass
-        # Auto-compute old_price if discount is given but old_price is omitted
-        elif self.discount and self.discount > 0 and self.price and (not self.old_price or self.old_price == 0):
-            try:
-                self.old_price = round(float(self.price) / (1 - (float(self.discount) / 100)), 2)
-            except Exception:
-                pass
+        # Auto-compute discount whenever old_price and price are given
+        try:
+            if self.old_price is not None and self.price is not None:
+                p = float(self.price)
+                op = float(self.old_price)
+                if op > p > 0:
+                    self.discount = round(((op - p) / op) * 100, 2)
+                elif op <= p:
+                    self.discount = 0
+            elif (self.old_price is None or float(self.old_price or 0) == 0) and self.discount and float(self.discount) > 0 and self.price:
+                p = float(self.price)
+                d = float(self.discount)
+                if d < 100:
+                    self.old_price = round(p / (1 - (d / 100)), 2)
+        except Exception:
+            pass
         super().save(*args, **kwargs)
 
     def __str__(self):

@@ -11,15 +11,15 @@ class ProductSerializer(serializers.ModelSerializer):
 
     def to_internal_value(self, data):
         data = data.copy() if hasattr(data, 'copy') else dict(data)
-        if 'oldPrice' in data and ('old_price' not in data or data.get('old_price') is None):
-            data['old_price'] = data['oldPrice']
-        elif 'old_price' in data and ('oldPrice' not in data or data.get('oldPrice') is None):
-            data['oldPrice'] = data['old_price']
+        val = data.get('oldPrice') if data.get('oldPrice') is not None else data.get('old_price')
+        if val is not None:
+            data['old_price'] = val
+            data['oldPrice'] = val
         return super().to_internal_value(data)
 
     def to_representation(self, instance):
         ret = super().to_representation(instance)
-        val = ret.get('old_price') or ret.get('oldPrice')
+        val = ret.get('old_price') if ret.get('old_price') is not None else ret.get('oldPrice')
         ret['old_price'] = val
         ret['oldPrice'] = val
         return ret
