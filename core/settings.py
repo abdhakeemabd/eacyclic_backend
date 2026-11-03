@@ -98,6 +98,11 @@ if _DATABASE_URL.startswith('postgres'):
             conn_health_checks=True,
             ssl_require=True,
         )
+        # Test host reachability so offline/local environments fall back to SQLite cleanly
+        import socket
+        db_host = parsed_db.get('HOST', '')
+        if db_host:
+            socket.gethostbyname(db_host)
         DATABASES = {'default': parsed_db}
     except Exception as err:
         print(f"[DATABASE WARNING] PostgreSQL connection failed ({err}). Falling back to local SQLite.")
