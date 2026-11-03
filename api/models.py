@@ -3,11 +3,12 @@ from django.db import models
 class Product(models.Model):
     name = models.CharField(max_length=255)
     description = models.TextField()
-    price = models.DecimalField(max_digits=10, decimal_places=2)
+    price = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="Selling Price (₹)")
+    old_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, verbose_name="MRP / Old Price (₹)")
     category = models.CharField(max_length=100)
     stock = models.IntegerField(default=0)
     image_url = models.TextField(blank=True, null=True)
-    discount = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    discount = models.DecimalField(max_digits=5, decimal_places=2, default=0, verbose_name="Discount (%)")
     isActive = models.BooleanField(default=True)
     freeShipping = models.BooleanField(default=True)
     gallery = models.JSONField(default=list, blank=True, null=True)
@@ -15,6 +16,21 @@ class Product(models.Model):
     colors = models.JSONField(default=list, blank=True, null=True)
     variants = models.JSONField(default=list, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        # Auto-compute discount if old_price and price are given
+        if self.old_price and self.price and self.old_price > self.price and (not self.discount or self.discount == 0):
+            try:
+                self.discount = round(((float(self.old_price) - float(self.price)) / float(self.old_price)) * 100, 2)
+            except Exception:
+                pass
+        # Auto-compute old_price if discount is given but old_price is omitted
+        elif self.discount and self.discount > 0 and self.price and (not self.old_price or self.old_price == 0):
+            try:
+                self.old_price = round(float(self.price) / (1 - (float(self.discount) / 100)), 2)
+            except Exception:
+                pass
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.name

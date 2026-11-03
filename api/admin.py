@@ -3,9 +3,28 @@ from .models import Product, Order, OrderItem, Contact, UserProfile, Cart, CartI
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = ('name', 'category', 'price', 'stock', 'discount', 'created_at')
-    list_filter = ('category',)
+    list_display = ('name', 'category', 'price', 'old_price', 'stock', 'discount', 'created_at')
+    list_filter = ('category', 'isActive', 'freeShipping')
     search_fields = ('name', 'description', 'category')
+    fieldsets = (
+        ('Basic Information', {
+            'fields': ('name', 'category', 'description', 'stock')
+        }),
+        ('Pricing & Discount', {
+            'fields': ('price', 'old_price', 'discount'),
+            'description': 'Enter the Selling Price and MRP / Old Price. If discount is left at 0, it will be automatically calculated.'
+        }),
+        ('Status & Shipping', {
+            'fields': ('isActive', 'freeShipping')
+        }),
+        ('Media', {
+            'fields': ('image_url', 'gallery')
+        }),
+        ('Variants Configuration', {
+            'fields': ('sizes', 'colors', 'variants'),
+            'classes': ('collapse',)
+        }),
+    )
 
 class OrderItemInline(admin.TabularInline):
     model = OrderItem
