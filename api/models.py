@@ -40,12 +40,15 @@ class Product(models.Model):
         return self.name
 
 class Order(models.Model):
-    id = models.IntegerField(primary_key=True)
+    id = models.BigIntegerField(primary_key=True)
+    user = models.ForeignKey('auth.User', on_delete=models.SET_NULL, null=True, blank=True, related_name='orders')
     customer_name = models.CharField(max_length=255)
     customer_email = models.EmailField(null=True, blank=True)
     customer_phone = models.CharField(max_length=20)
     shipping_address = models.TextField()
     status = models.CharField(max_length=50, default="pending")
+    payment_method = models.CharField(max_length=50, default="Cash on Delivery")
+    payment_status = models.CharField(max_length=50, default="Pending")
     total = models.DecimalField(max_digits=10, decimal_places=2)
     subtotal = models.DecimalField(max_digits=10, decimal_places=2)
     shipping_cost = models.DecimalField(max_digits=10, decimal_places=2, default=0)
@@ -59,6 +62,7 @@ class OrderItem(models.Model):
     order = models.ForeignKey(Order, related_name='items', on_delete=models.CASCADE)
     product_id = models.IntegerField(null=True, blank=True)
     product_name = models.CharField(max_length=255)
+    product_image = models.TextField(blank=True, null=True)
     selected_size = models.CharField(max_length=50, blank=True, null=True, default='')
     selected_color = models.CharField(max_length=50, blank=True, null=True, default='')
     quantity = models.IntegerField(default=1)
@@ -112,6 +116,7 @@ class Delivery(models.Model):
     order = models.OneToOneField(Order, on_delete=models.CASCADE, related_name='delivery')
     status = models.CharField(max_length=50, default='processing') # processing, shipped, delivered
     tracking_number = models.CharField(max_length=100, blank=True)
+    carrier = models.CharField(max_length=100, blank=True, default='Express Logistics')
     driver_name = models.CharField(max_length=100, blank=True)
     driver_phone = models.CharField(max_length=20, blank=True)
     estimated_delivery = models.DateTimeField(null=True, blank=True)

@@ -93,6 +93,103 @@ class OrderViewSet(viewsets.ModelViewSet):
     serializer_class = OrderSerializer
     permission_classes = [IsAdminOrOrderPlacement]
 
+    @action(detail=False, methods=['get'])
+    def my_orders(self, request):
+        if not request.user.is_authenticated:
+            return Response({'error': 'Authentication required to view your orders.'}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        # Return orders linked directly or by user email
+        orders = Order.objects.filter(
+            Q(user=request.user) | (Q(customer_email__iexact=request.user.email) if request.user.email else Q())
+        ).order_by('-created_at')
+        serializer = self.get_serializer(orders, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['patch', 'post'])
+    def cancel(self, request, pk=None):
+        order = self.get_object()
+        is_admin = request.user.is_authenticated and (request.user.is_staff or request.user.is_superuser)
+        
+        current_status = (order.status or '').lower()
+        if current_status in ['delivered', 'cancelled'] and not is_admin:
+            return Response(
+                {'error': f'Order cannot be cancelled as it is already marked as {order.status}.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        order.status = 'cancelled'
+        order.save()
+
+        if hasattr(order, 'delivery'):
+            order.delivery.status = 'cancelled'
+            order.delivery.save()
+
+        return Response({
+            'status': 'cancelled',
+            'message': 'Order successfully cancelled.',
+            'order': self.get_serializer(order).data
+        })
+
+    @action(detail=True, methods=['get'])
+    def track(self, request, pk=None):
+        order = self.get_object()
+        delivery = getattr(order, 'delivery', None)
+        curr_status = (order.status or 'pending').lower()
+
+        # Build chronological tracker matching Amazon / Flipkart e-commerce convention
+        created = order.created_at
+        timeline = [
+            {
+                'key': 'placed',
+                'title': 'Order Confirmed',
+                'description': 'Your order has been placed and received by store.',
+                'timestamp': created,
+                'completed': True,
+                'current': curr_status == 'pending'
+            },
+            {
+                'key': 'processing',
+                'title': 'Packed & Processed',
+                'description': 'Seller is preparing your package for courier pickup.',
+                'timestamp': (created + timedelta(hours=6)) if curr_status in ['processing', 'shipped', 'delivered'] else None,
+                'completed': curr_status in ['processing', 'shipped', 'delivered'],
+                'current': curr_status == 'processing'
+            },
+            {
+                'key': 'shipped',
+                'title': 'Shipped / In Transit',
+                'description': f"Dispatched with {delivery.carrier if delivery and delivery.carrier else 'Express Courier'}. Tracking ID: {delivery.tracking_number if delivery else 'Pending'}",
+                'timestamp': (created + timedelta(days=1)) if curr_status in ['shipped', 'delivered'] else None,
+                'completed': curr_status in ['shipped', 'delivered'],
+                'current': curr_status == 'shipped'
+            },
+            {
+                'key': 'delivered',
+                'title': 'Delivered',
+                'description': 'Package delivered safely to destination address.',
+                'timestamp': (delivery.estimated_delivery if delivery and delivery.estimated_delivery else created + timedelta(days=4)) if curr_status == 'delivered' else None,
+                'completed': curr_status == 'delivered',
+                'current': curr_status == 'delivered'
+            }
+        ]
+
+        if curr_status == 'cancelled':
+            timeline.append({
+                'key': 'cancelled',
+                'title': 'Order Cancelled',
+                'description': 'This order was cancelled.',
+                'timestamp': order.created_at,
+                'completed': True,
+                'current': True
+            })
+
+        return Response({
+            'order_id': order.id,
+            'status': order.status,
+            'timeline': timeline,
+            'delivery': DeliverySerializer(delivery).data if delivery else None
+        })
+
     @action(detail=True, methods=['patch'])
     def status(self, request, pk=None):
         order = self.get_object()
@@ -104,7 +201,7 @@ class OrderViewSet(viewsets.ModelViewSet):
             if hasattr(order, 'delivery'):
                 order.delivery.status = new_status
                 order.delivery.save()
-            return Response({'status': 'Order status updated'})
+            return Response({'status': 'Order status updated', 'order': self.get_serializer(order).data})
         return Response({'error': 'Status not provided'}, status=400)
 
 class DeliveryViewSet(viewsets.ModelViewSet):
