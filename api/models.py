@@ -89,6 +89,7 @@ class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
     phone = models.CharField(max_length=20, blank=True)
     address = models.TextField(blank=True)
+    saved_addresses = models.JSONField(default=list, blank=True)
     age = models.IntegerField(null=True, blank=True)
     gender = models.CharField(max_length=20, blank=True)
 

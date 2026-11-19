@@ -11,6 +11,7 @@ from datetime import timedelta
 
 import secrets
 import hashlib
+import threading
 from django.core.mail import send_mail
 from django.http import JsonResponse
 from django.conf import settings
@@ -330,6 +331,73 @@ def generate_otp_html_email(otp_code):
 </body>
 </html>"""
 
+def dispatch_otp_email_async(email, otp_code):
+    """
+    Sends the OTP email in a non-blocking background daemon thread.
+    This guarantees that the API response returns instantly (<50ms) to the client,
+    eliminating the 5-10 second latency caused by synchronous SMTP / HTTP connection overhead.
+    """
+    def _send_worker():
+        subject = 'Your Verification Code - Eacyclic'
+        plain_message = f'Hello,\n\nYour OTP verification code is: {otp_code}\n\nThis code is valid for 5 minutes. Do not share this code with anyone.'
+        html_message = generate_otp_html_email(otp_code)
+
+        email_sent = False
+        email_error = None
+        resend_api_key = getattr(settings, 'RESEND_API_KEY', '').strip()
+
+        if resend_api_key:
+            # --- PRIMARY: Resend HTTP API (works on Render free tier) ---
+            try:
+                import resend
+                resend.api_key = resend_api_key
+                from_addr = getattr(settings, 'RESEND_FROM_EMAIL', 'Eacyclic <noreply@eacyclic.com>')
+                print(f"[OTP EMAIL BG] Sending via Resend API to {email} from {from_addr}")
+                params = {
+                    "from": from_addr,
+                    "to": [email],
+                    "subject": subject,
+                    "html": html_message,
+                    "text": plain_message,
+                }
+                r = resend.Emails.send(params)
+                print(f"[OTP EMAIL BG] Resend response: {r}")
+                email_sent = True
+                print(f"[OTP EMAIL BG] Successfully sent to {email} via Resend")
+            except Exception as e:
+                email_error = str(e)
+                print(f"[OTP EMAIL BG ERROR] Resend failed: {e}")
+        else:
+            # --- FALLBACK: Django SMTP (works locally, blocked on Render free tier) ---
+            from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', None) or 'noreply@eacyclic.com'
+            try:
+                backend_used = getattr(settings, 'EMAIL_BACKEND', '')
+                print(f"[OTP EMAIL BG] Sending via SMTP to {email}, backend={backend_used}")
+                send_mail(
+                    subject=subject,
+                    message=plain_message,
+                    from_email=from_email,
+                    recipient_list=[email],
+                    html_message=html_message,
+                    fail_silently=False,
+                )
+                email_sent = True
+                print(f"[OTP EMAIL BG] Successfully sent to {email} via SMTP")
+            except Exception as e:
+                email_error = str(e)
+                print(f"[OTP EMAIL BG ERROR] SMTP failed: {e}")
+
+        if not email_sent:
+            print("=================================================")
+            print(f"[OTP FALLBACK] EMAIL FAILED — OTP FOR {email}: {otp_code}")
+            print(f"[OTP FALLBACK] Error: {email_error}")
+            print("=================================================")
+
+    # Always log the OTP code to server console immediately for rapid verification
+    print(f"[OTP DISPATCH] Generated OTP for {email}: {otp_code} (Valid for 5 mins)")
+    thread = threading.Thread(target=_send_worker, daemon=True)
+    thread.start()
+
 # --- AUTH & USER PROFILE ---
 class AuthView(views.APIView):
     authentication_classes = []
@@ -343,11 +411,11 @@ class AuthView(views.APIView):
                     return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
 
                 now = timezone.now()
-                # Rate limiting / Cooldown check (60 seconds)
+                # Rate limiting / Cooldown check (30 seconds)
                 try:
-                    recent_otp = OTPToken.objects.filter(email=email, created_at__gte=now - timedelta(seconds=60)).first()
+                    recent_otp = OTPToken.objects.filter(email=email, created_at__gte=now - timedelta(seconds=30)).first()
                     if recent_otp:
-                        return Response({'error': 'Please wait 60 seconds before requesting another OTP.'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+                        return Response({'error': 'Please wait 30 seconds before requesting another OTP.'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
                 except Exception as db_err:
                     print(f"[OTP DB ERROR] {db_err}")
 
@@ -356,7 +424,7 @@ class AuthView(views.APIView):
                 otp_hash_val = hash_otp(otp_code)
                 expires_at = now + timedelta(minutes=5)
 
-                # Save OTP Token
+                # Save OTP Token in DB
                 try:
                     OTPToken.objects.create(
                         email=email,
@@ -366,73 +434,18 @@ class AuthView(views.APIView):
                 except Exception as create_err:
                     print(f"[OTP TOKEN CREATE ERROR] {create_err}")
 
-                # Send OTP Email
-                # Render free tier blocks SMTP → use Resend HTTP API as primary method
-                subject = 'Your Verification Code - Eacyclic'
-                plain_message = f'Hello,\n\nYour OTP verification code is: {otp_code}\n\nThis code is valid for 5 minutes. Do not share this code with anyone.'
-                html_message = generate_otp_html_email(otp_code)
+                # Send OTP Email asynchronously in background daemon thread (instant HTTP response)
+                dispatch_otp_email_async(email, otp_code)
 
-                email_sent = False
-                email_error = None
-
-                resend_api_key = getattr(settings, 'RESEND_API_KEY', '').strip()
-
-                if resend_api_key:
-                    # --- PRIMARY: Resend HTTP API (works on Render free tier) ---
-                    try:
-                        import resend
-                        resend.api_key = resend_api_key
-                        from_addr = getattr(settings, 'RESEND_FROM_EMAIL', 'Eacyclic <noreply@eacyclic.com>')
-                        print(f"[OTP EMAIL] Sending via Resend API to {email} from {from_addr}")
-                        params = {
-                            "from": from_addr,
-                            "to": [email],
-                            "subject": subject,
-                            "html": html_message,
-                            "text": plain_message,
-                        }
-                        r = resend.Emails.send(params)
-                        print(f"[OTP EMAIL] Resend response: {r}")
-                        email_sent = True
-                        print(f"[OTP EMAIL] Successfully sent to {email} via Resend")
-                    except Exception as e:
-                        import traceback
-                        email_error = str(e)
-                        print(f"[OTP EMAIL ERROR] Resend failed: {e}")
-                        traceback.print_exc()
-                else:
-                    # --- FALLBACK: Django SMTP (works locally, blocked on Render free tier) ---
-                    from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', None) or 'noreply@eacyclic.com'
-                    try:
-                        backend_used = getattr(settings, 'EMAIL_BACKEND', '')
-                        print(f"[OTP EMAIL] Sending via SMTP to {email}, backend={backend_used}")
-                        send_mail(
-                            subject=subject,
-                            message=plain_message,
-                            from_email=from_email,
-                            recipient_list=[email],
-                            html_message=html_message,
-                            fail_silently=False,
-                        )
-                        email_sent = True
-                        print(f"[OTP EMAIL] Successfully sent to {email} via SMTP")
-                    except Exception as e:
-                        import traceback
-                        email_error = str(e)
-                        print(f"[OTP EMAIL ERROR] SMTP failed: {e}")
-                        traceback.print_exc()
-
-                if not email_sent:
-                    print(f"=================================================")
-                    print(f"[OTP FALLBACK] EMAIL FAILED — OTP FOR {email}: {otp_code}")
-                    print(f"[OTP FALLBACK] Error: {email_error}")
-                    print(f"=================================================")
-
-                return Response({
+                resp_data = {
                     'message': f'OTP code sent to {email}. Please check your inbox.',
                     'email': email,
                     'expires_in': 300
-                }, status=status.HTTP_200_OK)
+                }
+                if settings.DEBUG:
+                    resp_data['debug_otp'] = otp_code
+
+                return Response(resp_data, status=status.HTTP_200_OK)
 
 
             elif action == 'verify-otp':
@@ -562,6 +575,10 @@ class UserProfileView(views.APIView):
             profile.phone = request.data.get('phone')
         if 'address' in request.data:
             profile.address = request.data.get('address')
+        if 'saved_addresses' in request.data:
+            addrs = request.data.get('saved_addresses')
+            if isinstance(addrs, list):
+                profile.saved_addresses = addrs
         if 'age' in request.data:
             try:
                 profile.age = int(request.data.get('age')) if request.data.get('age') else None

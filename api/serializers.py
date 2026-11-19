@@ -109,19 +109,20 @@ class ContactSerializer(serializers.ModelSerializer):
 class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserProfile
-        fields = ['phone', 'address', 'age', 'gender']
+        fields = ['phone', 'address', 'saved_addresses', 'age', 'gender']
 
 class UserSerializer(serializers.ModelSerializer):
     profile = UserProfileSerializer(read_only=True)
     name = serializers.SerializerMethodField()
     phone = serializers.SerializerMethodField()
     address = serializers.SerializerMethodField()
+    saved_addresses = serializers.SerializerMethodField()
     age = serializers.SerializerMethodField()
     gender = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'name', 'phone', 'address', 'age', 'gender', 'profile']
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'name', 'phone', 'address', 'saved_addresses', 'age', 'gender', 'profile']
 
     def get_name(self, obj):
         return obj.first_name or obj.username
@@ -133,6 +134,30 @@ class UserSerializer(serializers.ModelSerializer):
     def get_address(self, obj):
         profile = getattr(obj, 'profile', None)
         return profile.address if profile else ''
+
+    def get_saved_addresses(self, obj):
+        profile = getattr(obj, 'profile', None)
+        if not profile:
+            return []
+        addrs = getattr(profile, 'saved_addresses', None)
+        if addrs and isinstance(addrs, list) and len(addrs) > 0:
+            return addrs
+        if profile.address:
+            return [{
+                'id': 1,
+                'name': obj.first_name or obj.username or 'Default',
+                'phone': profile.phone or '',
+                'type': 'HOME',
+                'houseName': profile.address,
+                'area': '',
+                'city': '',
+                'district': '',
+                'state': 'Kerala',
+                'pincode': '',
+                'country': 'India',
+                'isDefault': True
+            }]
+        return []
 
     def get_age(self, obj):
         profile = getattr(obj, 'profile', None)
