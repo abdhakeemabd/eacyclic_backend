@@ -44,16 +44,15 @@ class IsAdminOrContactSubmit(permissions.BasePermission):
 
 class IsAdminOrOrderPlacement(permissions.BasePermission):
     """
-    Allows customers to place orders (create) and view their order status (retrieve),
-    and view their own orders (my_orders).
-    Restricts listing all store orders and general administrative actions strictly to admins.
+    Requires authentication to place, cancel, reorder, or view personal orders.
+    Allows retrieving/tracking an order by ID and restricts store-wide listing/admin actions to staff.
     """
     def has_permission(self, request, view):
         action = getattr(view, 'action', None)
-        if action in ['create', 'retrieve', 'cancel', 'track']:
-            return True
-        if action == 'my_orders':
+        if action in ['create', 'cancel', 'my_orders', 'reorder']:
             return bool(request.user and request.user.is_authenticated)
+        if action in ['retrieve', 'track']:
+            return True
         return bool(
             request.user and 
             request.user.is_authenticated and 

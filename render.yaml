@@ -37,6 +37,10 @@ services:
         sync: false
       - key: RESEND_FROM_EMAIL
         value: "Eacyclic <noreply@eacyclic.com>"
+      - key: ADMIN_NOTIFICATION_EMAIL
+        value: "eacyclic@gmail.com"
+      - key: SITE_URL
+        value: "https://eacyclic.com"
       # Admin / Superuser Credentials (Configured safely in Render dashboard, never in git)
       - key: DJANGO_SUPERUSER_USERNAME
         sync: false

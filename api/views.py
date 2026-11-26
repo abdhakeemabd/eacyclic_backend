@@ -11,13 +11,18 @@ from datetime import timedelta
 
 import secrets
 import hashlib
-import threading
-from django.core.mail import send_mail
+from django.db import connection
 from django.http import JsonResponse
 from django.conf import settings
 from .models import Product, Order, Contact, UserProfile, Cart, CartItem, Delivery, OTPToken
 from .serializers import (ProductSerializer, OrderSerializer, ContactSerializer,
                           UserSerializer, CartSerializer, CartItemSerializer, DeliverySerializer)
+from .emails import (
+    dispatch_otp_email_async,
+    dispatch_order_confirmation_email_async,
+    dispatch_order_status_email_async,
+    dispatch_contact_notification_async,
+)
 
 def custom_500_handler(request, *args, **kwargs):
     response = JsonResponse({'error': 'Internal Server Error'}, status=500)
@@ -69,17 +74,63 @@ def hash_otp(otp_code):
 
 
 
+# --- HEALTH CHECK (Keep-Alive & Fast Wakeup) ---
+class HealthCheckView(views.APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        db_ok = True
+        try:
+            connection.ensure_connection()
+        except Exception:
+            db_ok = False
+        response = Response({
+            'status': 'ok' if db_ok else 'degraded',
+            'database': 'connected' if db_ok else 'unavailable',
+            'email_configured': bool(
+                getattr(settings, 'RESEND_API_KEY', '').strip()
+                or getattr(settings, 'EMAIL_HOST_USER', '').strip()
+            ),
+        })
+        response['Cache-Control'] = 'no-store'
+        return response
+
+
 # --- PRODUCTS & CONTACTS ---
 class ProductViewSet(viewsets.ModelViewSet):
     queryset = Product.objects.all().order_by('-created_at')
     serializer_class = ProductSerializer
     permission_classes = [IsAdminOrReadOnly]
 
+    def get_queryset(self):
+        qs = Product.objects.all().order_by('-created_at')
+        include_inactive = self.request.query_params.get('include_inactive') == '1'
+        is_admin = self.request.user and self.request.user.is_authenticated and (
+            self.request.user.is_staff or self.request.user.is_superuser
+        )
+        if self.action == 'list' and not (include_inactive and is_admin):
+            qs = qs.filter(isActive=True)
+        return qs
+
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+        is_admin = request.user and request.user.is_authenticated and (
+            request.user.is_staff or request.user.is_superuser
+        )
+        if not is_admin:
+            response['Cache-Control'] = 'public, max-age=60, stale-while-revalidate=300'
+        return response
+
 
 class ContactViewSet(viewsets.ModelViewSet):
     queryset = Contact.objects.all().order_by('-created_at')
     serializer_class = ContactSerializer
     permission_classes = [IsAdminOrContactSubmit]
+
+    def perform_create(self, serializer):
+        contact = serializer.save()
+        dispatch_contact_notification_async(contact)
 
     @action(detail=True, methods=['patch'])
     def read(self, request, pk=None):
@@ -93,6 +144,10 @@ class OrderViewSet(viewsets.ModelViewSet):
     queryset = Order.objects.all().order_by('-created_at')
     serializer_class = OrderSerializer
     permission_classes = [IsAdminOrOrderPlacement]
+
+    def perform_create(self, serializer):
+        order = serializer.save()
+        dispatch_order_confirmation_email_async(order)
 
     @action(detail=False, methods=['get'])
     def my_orders(self, request):
@@ -110,7 +165,13 @@ class OrderViewSet(viewsets.ModelViewSet):
     def cancel(self, request, pk=None):
         order = self.get_object()
         is_admin = request.user.is_authenticated and (request.user.is_staff or request.user.is_superuser)
-        
+        is_owner = request.user.is_authenticated and (
+            order.user_id == request.user.id
+            or (order.customer_email and request.user.email and order.customer_email.lower() == request.user.email.lower())
+        )
+        if not (is_admin or is_owner):
+            return Response({'error': 'You do not have permission to cancel this order.'}, status=status.HTTP_403_FORBIDDEN)
+
         current_status = (order.status or '').lower()
         if current_status in ['delivered', 'cancelled'] and not is_admin:
             return Response(
@@ -125,10 +186,46 @@ class OrderViewSet(viewsets.ModelViewSet):
             order.delivery.status = 'cancelled'
             order.delivery.save()
 
+        dispatch_order_status_email_async(order, 'cancelled')
+
         return Response({
             'status': 'cancelled',
             'message': 'Order successfully cancelled.',
             'order': self.get_serializer(order).data
+        })
+
+    @action(detail=True, methods=['post'])
+    def reorder(self, request, pk=None):
+        """Copy all matching products from a past order back into the authenticated user's cart."""
+        if not request.user.is_authenticated:
+            return Response({'error': 'Authentication required.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        order = self.get_object()
+        cart, _ = Cart.objects.get_or_create(user=request.user)
+        added_count = 0
+        for item in order.items.all():
+            product = None
+            if item.product_id:
+                product = Product.objects.filter(id=item.product_id, isActive=True).first()
+            if not product and item.product_name:
+                product = Product.objects.filter(name__iexact=item.product_name, isActive=True).first()
+            if product:
+                cart_item, created = CartItem.objects.get_or_create(
+                    cart=cart,
+                    product=product,
+                    selected_size=item.selected_size or '',
+                    selected_color=item.selected_color or '',
+                    defaults={'quantity': max(1, int(item.quantity or 1))}
+                )
+                if not created:
+                    cart_item.quantity += max(1, int(item.quantity or 1))
+                    cart_item.save()
+                added_count += 1
+
+        return Response({
+            'status': 'ok',
+            'added_count': added_count,
+            'cart': CartSerializer(cart).data,
         })
 
     @action(detail=True, methods=['get'])
@@ -202,6 +299,7 @@ class OrderViewSet(viewsets.ModelViewSet):
             if hasattr(order, 'delivery'):
                 order.delivery.status = new_status
                 order.delivery.save()
+            dispatch_order_status_email_async(order, new_status)
             return Response({'status': 'Order status updated', 'order': self.get_serializer(order).data})
         return Response({'error': 'Status not provided'}, status=400)
 
@@ -219,6 +317,7 @@ class DeliveryViewSet(viewsets.ModelViewSet):
             delivery.save()
             delivery.order.status = new_status
             delivery.order.save()
+            dispatch_order_status_email_async(delivery.order, new_status)
             return Response({'status': 'Delivery status updated'})
         return Response({'error': 'Status not provided'}, status=400)
 
@@ -266,13 +365,29 @@ class CartViewSet(viewsets.ViewSet):
         return Response({'status': 'Cart cleared'})
 
     # For individual cart items (PUT/DELETE)
+    def _find_cart_item(self, request, pk):
+        qs = CartItem.objects.filter(cart__user=request.user).filter(Q(id=pk) | Q(product__id=pk))
+        selected_size = request.data.get('selected_size') if hasattr(request, 'data') else None
+        selected_color = request.data.get('selected_color') if hasattr(request, 'data') else None
+        if selected_size is None:
+            selected_size = request.query_params.get('selected_size')
+        if selected_color is None:
+            selected_color = request.query_params.get('selected_color')
+        if selected_size is not None or selected_color is not None:
+            exact = qs.filter(
+                selected_size=selected_size or '',
+                selected_color=selected_color or '',
+            ).first()
+            if exact:
+                return exact
+        return qs.first()
+
     def update_item(self, request, pk=None):
         try:
-            # Check by cart item ID first, then product ID
-            item = CartItem.objects.filter(cart__user=request.user).filter(Q(id=pk) | Q(product__id=pk)).first()
+            item = self._find_cart_item(request, pk)
             if not item:
                 return Response({'error': 'Item not in cart'}, status=404)
-            item.quantity = int(request.data.get('quantity', 1))
+            item.quantity = max(1, int(request.data.get('quantity', 1)))
             item.save()
             return Response({'status': 'Quantity updated'})
         except Exception as e:
@@ -280,123 +395,13 @@ class CartViewSet(viewsets.ViewSet):
 
     def destroy_item(self, request, pk=None):
         try:
-            item = CartItem.objects.filter(cart__user=request.user).filter(Q(id=pk) | Q(product__id=pk)).first()
+            item = self._find_cart_item(request, pk)
             if not item:
                 return Response({'error': 'Item not in cart'}, status=404)
             item.delete()
             return Response({'status': 'Item removed'})
         except Exception as e:
             return Response({'error': str(e)}, status=400)
-
-def generate_otp_html_email(otp_code):
-    return f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Your Verification Code</title>
-</head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 30px 15px; color: #1e293b;">
-    <div style="max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 20px; overflow: hidden; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01); border: 1px solid #e2e8f0;">
-        <!-- Header -->
-        <div style="background: linear-gradient(135deg, #f97316 0%, #ea580c 100%); padding: 36px 24px; text-align: center; color: #ffffff;">
-            <div style="font-size: 28px; font-weight: 900; letter-spacing: -0.5px; margin-bottom: 4px;">Eacyclic</div>
-            <div style="font-size: 13px; font-weight: 500; color: rgba(255, 255, 255, 0.9); text-transform: uppercase; letter-spacing: 1px;">Secure Sign In</div>
-        </div>
-        
-        <!-- Content -->
-        <div style="padding: 36px 32px; text-align: center;">
-            <div style="font-size: 20px; font-weight: 800; color: #0f172a; margin-bottom: 8px;">Your Authentication Code</div>
-            <div style="font-size: 14px; color: #64748b; line-height: 1.6; margin-bottom: 28px;">
-                Use the verification code below to log in to your Eacyclic account.
-            </div>
-            
-            <!-- OTP Badge -->
-            <div style="background: #fff7ed; border: 1.5px solid #ffedd5; border-radius: 16px; padding: 8px 12px; margin: 0 auto 28px auto; text-align: center;">
-                <div style="font-size: 24px; font-weight: 900; letter-spacing: 12px; color: #000000; font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, monospace; margin-left: 12px;">{otp_code}</div>
-                <div style="display: inline-block; background-color: #ffedd5; color: #c2410c; font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 20px; margin-top: 14px;">Valid for 5 minutes</div>
-            </div>
-
-            <!-- Security Alert -->
-            <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 16px; border-radius: 12px; text-align: left; font-size: 13px; color: #475569; line-height: 1.5;">
-                <strong style="color: #0f172a;">Security Notice:</strong> If you did not request this code, please ignore this email. Do not share this code with anyone.
-            </div>
-        </div>
-        
-        <!-- Footer -->
-        <div style="background-color: #f8fafc; padding: 20px; text-align: center; font-size: 12px; color: #94a3b8; border-top: 1px solid #f1f5f9;">
-            &copy; {timezone.now().year} Eacyclic. All rights reserved.
-        </div>
-    </div>
-</body>
-</html>"""
-
-def dispatch_otp_email_async(email, otp_code):
-    """
-    Sends the OTP email in a non-blocking background daemon thread.
-    This guarantees that the API response returns instantly (<50ms) to the client,
-    eliminating the 5-10 second latency caused by synchronous SMTP / HTTP connection overhead.
-    """
-    def _send_worker():
-        subject = 'Your Verification Code - Eacyclic'
-        plain_message = f'Hello,\n\nYour OTP verification code is: {otp_code}\n\nThis code is valid for 5 minutes. Do not share this code with anyone.'
-        html_message = generate_otp_html_email(otp_code)
-
-        email_sent = False
-        email_error = None
-        resend_api_key = getattr(settings, 'RESEND_API_KEY', '').strip()
-
-        if resend_api_key:
-            # --- PRIMARY: Resend HTTP API (works on Render free tier) ---
-            try:
-                import resend
-                resend.api_key = resend_api_key
-                from_addr = getattr(settings, 'RESEND_FROM_EMAIL', 'Eacyclic <noreply@eacyclic.com>')
-                print(f"[OTP EMAIL BG] Sending via Resend API to {email} from {from_addr}")
-                params = {
-                    "from": from_addr,
-                    "to": [email],
-                    "subject": subject,
-                    "html": html_message,
-                    "text": plain_message,
-                }
-                r = resend.Emails.send(params)
-                print(f"[OTP EMAIL BG] Resend response: {r}")
-                email_sent = True
-                print(f"[OTP EMAIL BG] Successfully sent to {email} via Resend")
-            except Exception as e:
-                email_error = str(e)
-                print(f"[OTP EMAIL BG ERROR] Resend failed: {e}")
-        else:
-            # --- FALLBACK: Django SMTP (works locally, blocked on Render free tier) ---
-            from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', None) or 'noreply@eacyclic.com'
-            try:
-                backend_used = getattr(settings, 'EMAIL_BACKEND', '')
-                print(f"[OTP EMAIL BG] Sending via SMTP to {email}, backend={backend_used}")
-                send_mail(
-                    subject=subject,
-                    message=plain_message,
-                    from_email=from_email,
-                    recipient_list=[email],
-                    html_message=html_message,
-                    fail_silently=False,
-                )
-                email_sent = True
-                print(f"[OTP EMAIL BG] Successfully sent to {email} via SMTP")
-            except Exception as e:
-                email_error = str(e)
-                print(f"[OTP EMAIL BG ERROR] SMTP failed: {e}")
-
-        if not email_sent:
-            print("=================================================")
-            print(f"[OTP FALLBACK] EMAIL FAILED — OTP FOR {email}: {otp_code}")
-            print(f"[OTP FALLBACK] Error: {email_error}")
-            print("=================================================")
-
-    # Always log the OTP code to server console immediately for rapid verification
-    print(f"[OTP DISPATCH] Generated OTP for {email}: {otp_code} (Valid for 5 mins)")
-    thread = threading.Thread(target=_send_worker, daemon=True)
-    thread.start()
 
 # --- AUTH & USER PROFILE ---
 class AuthView(views.APIView):

@@ -1,6 +1,11 @@
 import os
 import django
-from decouple import config
+try:
+    from decouple import config
+except ImportError:
+    def config(key, default=None, cast=None):
+        val = os.environ.get(key, default)
+        return cast(val) if (cast is not None and val is not None) else val
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
 django.setup()
