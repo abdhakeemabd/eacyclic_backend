@@ -43,10 +43,16 @@ class OrderSerializer(serializers.ModelSerializer):
         model = Order
         fields = '__all__'
 
+    def validate_items(self, value):
+        if not value or len(value) == 0:
+            raise serializers.ValidationError("At least one order item is required.")
+        return value
+
     def create(self, validated_data):
         import secrets
         import time
         import random
+        from django.db import transaction
         from django.utils import timezone
         from datetime import timedelta
 
@@ -63,41 +69,42 @@ class OrderSerializer(serializers.ModelSerializer):
             if not validated_data.get('customer_email'):
                 validated_data['customer_email'] = request.user.email
 
-        try:
-            order = Order.objects.create(**validated_data)
-        except Exception as e:
-            # Resilient fallback if table is missing optional columns
-            err_str = str(e).lower()
-            if 'user_id' in err_str or 'user' in err_str:
-                validated_data.pop('user', None)
-            if 'payment_method' in err_str:
-                validated_data.pop('payment_method', None)
-            if 'payment_status' in err_str:
-                validated_data.pop('payment_status', None)
-            order = Order.objects.create(**validated_data)
-
-        for item_data in items_data:
+        with transaction.atomic():
             try:
-                OrderItem.objects.create(order=order, **item_data)
+                order = Order.objects.create(**validated_data)
             except Exception as e:
-                if 'product_image' in str(e).lower():
-                    item_data.pop('product_image', None)
-                    OrderItem.objects.create(order=order, **item_data)
-                else:
-                    raise e
+                # Resilient fallback if table is missing optional columns
+                err_str = str(e).lower()
+                if 'user_id' in err_str or 'user' in err_str:
+                    validated_data.pop('user', None)
+                if 'payment_method' in err_str:
+                    validated_data.pop('payment_method', None)
+                if 'payment_status' in err_str:
+                    validated_data.pop('payment_status', None)
+                order = Order.objects.create(**validated_data)
 
-        # Auto-create tracking / delivery record for the order
-        try:
-            tracking_num = f"EAC{order.id}{secrets.token_hex(2).upper()}"
-            Delivery.objects.create(
-                order=order,
-                status='processing',
-                tracking_number=tracking_num,
-                carrier='BlueDart / Delhivery Express',
-                estimated_delivery=timezone.now() + timedelta(days=4)
-            )
-        except Exception:
-            pass
+            for item_data in items_data:
+                try:
+                    OrderItem.objects.create(order=order, **item_data)
+                except Exception as e:
+                    if 'product_image' in str(e).lower():
+                        item_data.pop('product_image', None)
+                        OrderItem.objects.create(order=order, **item_data)
+                    else:
+                        raise e
+
+            # Auto-create tracking / delivery record for the order
+            try:
+                tracking_num = f"EAC{order.id}{secrets.token_hex(2).upper()}"
+                Delivery.objects.create(
+                    order=order,
+                    status='processing',
+                    tracking_number=tracking_num,
+                    carrier='BlueDart / Delhivery Express',
+                    estimated_delivery=timezone.now() + timedelta(days=4)
+                )
+            except Exception:
+                pass
 
         return order
 

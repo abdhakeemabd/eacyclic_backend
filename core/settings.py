@@ -11,8 +11,29 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
 from pathlib import Path
+import os
 import dj_database_url
-from decouple import config
+
+try:
+    from decouple import config
+except ImportError:
+    # Safe fallback if python-decouple is not installed in the active Python environment
+    _env_file = Path(__file__).resolve().parent.parent / '.env'
+    _file_vars = {}
+    if _env_file.exists():
+        for _line in _env_file.read_text(encoding='utf-8').splitlines():
+            _s = _line.strip()
+            if _s and not _s.startswith('#') and '=' in _s:
+                _k, _v = _s.split('=', 1)
+                _file_vars[_k.strip()] = _v.strip().strip('"').strip("'")
+
+    def config(key, default=None, cast=None):
+        val = os.environ.get(key, _file_vars.get(key, default))
+        if cast is bool and isinstance(val, str):
+            return val.strip().lower() in ('1', 'true', 'yes', 'on')
+        if cast is not None and val is not None:
+            return cast(val)
+        return val
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -171,6 +192,8 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedStaticFilesStorage'
 
 RESEND_API_KEY = config('RESEND_API_KEY', default='').strip()
 RESEND_FROM_EMAIL = config('RESEND_FROM_EMAIL', default='Eacyclic <noreply@eacyclic.com>').strip()
+ADMIN_NOTIFICATION_EMAIL = config('ADMIN_NOTIFICATION_EMAIL', default='eacyclic@gmail.com').strip()
+SITE_URL = config('SITE_URL', default='https://eacyclic.com').strip().rstrip('/')
 
 _email_user = config('EMAIL_HOST_USER', default='').strip()
 _email_pass = config('EMAIL_HOST_PASSWORD', default='').strip()

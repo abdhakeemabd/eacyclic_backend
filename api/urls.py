@@ -2,7 +2,8 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (ProductViewSet, OrderViewSet, ContactViewSet, DeliveryViewSet, 
                     CartViewSet, AuthView, UserProfileView, AnalyticsViewSet, 
-                    AdminLoginView, AdminLogoutView, AdminLogoutAllView, ChangePasswordView)
+                    AdminLoginView, AdminLogoutView, AdminLogoutAllView, ChangePasswordView,
+                    HealthCheckView)
 from .sitemap import sitemap_products_view
 
 router = DefaultRouter(trailing_slash=False)
@@ -13,6 +14,8 @@ router.register(r'deliveries', DeliveryViewSet)
 router.register(r'analytics', AnalyticsViewSet, basename='analytics')
 
 urlpatterns = [
+    path('health', HealthCheckView.as_view(), name='api_health'),
+    path('health/', HealthCheckView.as_view(), name='api_health_slash'),
     path('', include(router.urls)),
     
     # Cart custom paths
